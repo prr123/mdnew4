@@ -6,22 +6,6 @@ import (
 	"fmt"
 )
 
-const (
-	NB = iota	// no block
-	PAR			// paragraph
-	HD			// heading
-	UL			// unordered list
-	ULi			// unordered list item
-	OL			// ordered list
-	OLi			// ordered list item
-	Qt			// quote
-	HL			// horizontal line
-	Code		// fenced code
-	EL			// empty line
-	Doc
-)
-
-
 
 type MdNode struct {
 	ch []*MdNode
@@ -40,6 +24,7 @@ type Block struct {
 	linSt int
 	linEnd int
 	Typ rune
+	closed bool
 }
 
 type MdParser struct {
@@ -66,21 +51,12 @@ type RLine struct {
 	linSt int
 	linEnd int
 	lintxt []byte
-	indSt int
-	nest int
+	spCount int
+	tbCount int
+	txtSt int
 	eolChar int
 }
 
-func PrLines(lines []RLine) {
-
-	fmt.Println("******* Lines *******")
-	for i:=0; i<len(lines); i++ {
-		l :=lines[i]
-		fmt.Printf("--[%2d]: (%2d %2d %2d %2d %1d) %s\n",i+1, l.linSt, l.linEnd, l.indSt, l.nest, l.eolChar, string(l.lintxt))
-	}
-	fmt.Println("***** End Lines *****")
-
-}
 
 func IsAlpha(let byte)(res bool) {
     res = false
@@ -142,7 +118,7 @@ func InitParseState(inp []byte) (pstate *MdPState) {
 	var mdDoc MdNode
 	mdDoc.blkSt = 0
 	mdDoc.blkEnd = len(inp)
-	mdDoc.typ = Doc
+//	mdDoc.typ = Doc
 	mdDoc.ch = nil
 	mdDoc.par = nil
 
@@ -152,7 +128,7 @@ func InitParseState(inp []byte) (pstate *MdPState) {
 	ps.Node = &mdDoc
 	ps.closed = true
 	ps.nest = 0
-	ps.state = NB
+//	ps.state = NB
 	return &ps
 }
 
@@ -185,20 +161,26 @@ func  (p *MdParser)ParseUL(ps *MdPState) *MdNode {
 
 	l := p.lines[ps.plin]
 
-fmt.Printf("line nest: %d\n", l.nest)
+//fmt.Printf("line nest: %d\n", l.nest)
 	blk := &MdNode{}
 
+	nest :=0
+	if l.spCount > 0 {
+		nest = l.spCount/4
+	} else {
+		nest = l.tbCount
+	}
 	// check whether there is a UL element
-	if ps.state != UL {
-		blk.typ = UL
+	if !ps.closed {
+		blk.el = "ul"
 		blk.par = ps.Node
 		blk.blkSt= l.linSt
 		blk.blkEnd = -1
 		ps.Blk = blk
-		ps.state = UL
+//		ps.state = UL
 	} else {
-		if l.nest > ps.nest {
-			blk.typ = UL
+		if nest > ps.nest {
+			blk.el = "ul"
 			blk.par = ps.Blk
 			blk.blkSt= l.linSt
 			blk.blkEnd = -1
@@ -207,13 +189,13 @@ fmt.Printf("line nest: %d\n", l.nest)
 			ps.nest++
 			PrintNode(blk, "nest")
 		}
-		if l.nest == ps.nest {
+		if nest == ps.nest {
 //			ps.Blk = blk.par
 			blk = ps.Blk
 //			ps.nest--
 //			PrintNode(blk, "reversion")
 		}
-		if l.nest < ps.nest {
+		if nest < ps.nest {
 			ps.Blk = ps.Blk.par
 			blk = ps.Blk
 			ps.nest--
@@ -222,7 +204,7 @@ fmt.Printf("line nest: %d\n", l.nest)
 	}
 
 	liblk := &MdNode{
-			typ: ULi,
+			el: "li",
 			par: blk,
 			blkSt: l.linSt,
 			blkEnd: -1,
@@ -292,7 +274,7 @@ func (p *MdParser)ParseHeading(ps *MdPState) *MdNode{
 	head := fmt.Sprintf("h%d",hdlev)
 	txtSt := l.linSt + txtst
 	blk := MdNode{
-		typ: HD,
+//		: HD,
 		el: head,
 		par: ps.Node,
 		blkSt: l.linSt,
@@ -377,50 +359,63 @@ func GetLines (inp []byte) (linList []RLine){
 	linSt:=0
 	linList = make([]RLine,0,128)
 
-	txtst := 0
 	for i:=0; i< len(inp); i++ {
-		if inp[i] == '\n' {
-			txtst = 0
-			newLine := RLine {
+		if inp[i] != '\n' { continue}
+
+		txtst := linSt
+		newLine := RLine {
 				linSt: linSt,
 				linEnd: i,
 				lintxt: inp[linSt:i],
 				eolChar: 0,
 			}
-			if linSt == i  {newLine.eolChar = 1}
-			if i-linSt >2 {
-				if inp[i-2] == ' ' && inp[i-1] == ' ' {newLine.eolChar = 2}
-			}
+		if linSt == i  {newLine.eolChar = 1}
+		if i-linSt >2 {
+			if inp[i-2] == ' ' && inp[i-1] == ' ' {newLine.eolChar = 2}
+		}
 
-			ind := linSt
+//			ind := linSt
 			spCount :=0
 			tbCount :=0
 			for j:=linSt; j<i-1; j++ {
-				if inp[j] == ' ' {
-					spCount++
-					continue
+				state :=0
+				switch state {
+				case 0:
+					if inp[j] == ' ' {
+						state =1
+						spCount++
+						break
+					}
+					if inp[j] == '\t' {
+						state = 2
+						tbCount++
+						break
+					}
+					txtst = j
+					state = 3
+				case 1:
+					if inp[j] == ' ' {
+						spCount++
+					} else {
+						txtst = j
+						state = 3
+					}
+				case 2:
+					if inp[j] == '\t' {
+						tbCount++
+					} else {
+						txtst = j
+						state = 3
+					}
+				default:
 				}
-				if inp[j] == '\t' {
-					tbCount++
-					continue
-				}
-				ind = j
-				break
+				if state == 3 {break}
 			}
-			newLine.indSt = ind
-			if spCount > 0 {
-				newLine.nest = spCount/4
-				txtst = spCount
-			}
-			if tbCount > 0 {
-				newLine.nest = tbCount
-				txtst = tbCount
-			}
-			newLine.lintxt = inp[linSt+txtst:i]
-
-			linList = append(linList,newLine)
-			linSt = i+1
-		}
+		newLine.spCount = spCount
+		newLine.tbCount = tbCount
+		newLine.txtSt = txtst
+		linList = append(linList,newLine)
+		linSt = i+1
 	}
 	return linList
 }
@@ -436,29 +431,36 @@ func (p *MdParser)Parse (ps *MdPState) (err error){
 	oldBlkTyp := ' '
 	newBlkTyp := 'N'
 	for i:=0; i< linNum; i++ {
+//fmt.Printf("\n**** line: %d\n")
 		line := linList[i]
 		if line.linSt == line.linEnd {
-			if oldBlkTyp == 'U' {
-				p.BlockList[prevBlk].linEnd=i
-				continue
+			if !p.BlockList[prevBlk].closed {
+				p.BlockList[prevBlk].closed = true
 			}
 
 			b := Block{
 				Typ: 'E',
 				linSt: i,
 				linEnd: i,
+				closed: true,
 			}
 			p.BlockList = append(p.BlockList, b)
 			prevBlk = len(p.BlockList) -1
 			oldBlkTyp = 'E'
 			continue
 		}
+		linLen := line.linEnd-line.linSt
 		flet := line.lintxt[0]
 		switch flet {
 		case '#':
+			if linLen < 3 {newBlkTyp = 'R'; break;}
 			newBlkTyp = '#'
-		case '-':
-			newBlkTyp = 'U'
+
+		case '-', '*', '+':
+			if linLen < 3 {newBlkTyp = 'R'; break;}
+			if line.lintxt[1] == ' ' {newBlkTyp = 'U'; break;}
+			if line.lintxt[1] == flet && line.lintxt[2] == flet {newBlkTyp = 'H'; break;}
+			newBlkTyp = 'P'
 
 		case '1','2','3','4','5','6','7','8','9':
 			newBlkTyp = 'O'
@@ -466,30 +468,39 @@ func (p *MdParser)Parse (ps *MdPState) (err error){
 		case '>':
 			newBlkTyp = 'Q'
 
+		case ' ':
+			if linLen < 5 {newBlkTyp = 'R'; break;}
+
+		case '\t':
+			if linLen < 2 {newBlkTyp = 'R'; break;}
+
 		case '`':
+			if linLen < 3 {newBlkTyp = 'R'; break;}
+			for k:=1; k< 3; k++ {
+				if line.lintxt[k] != '`' {newBlkTyp = 'R'; break;}
+			}
 			newBlkTyp = 'C'
 
 		default:
-			newBlkTyp = 'P'
+			switch oldBlkTyp {
+			case 'Q': newBlkTyp = 'Q'
+			case 'U': newBlkTyp = 'U'
+			case 'O': newBlkTyp = 'O'
+			default: newBlkTyp = 'P'
+			}
 		}
 
-		if oldBlkTyp == newBlkTyp {
-			// handle end of para with two empty spaces
-			if p.BlockList[prevBlk].eolChar == 2 {
-				b := Block{
-					Typ: newBlkTyp,
-					linSt: i,
-					linEnd: i,
-				}
-				p.BlockList = append(p.BlockList, b)
-				prevBlk = len(p.BlockList) -1
-//				oldBlkTyp = newBlkTyp
+		if oldBlkTyp == newBlkTyp && !p.BlockList[prevBlk].closed{
+			p.BlockList[prevBlk].linEnd=i
+			if line.eolChar == 2 {
+				p.BlockList[prevBlk].closed = true
 			}
 		} else {
 			b := Block{
 				Typ: newBlkTyp,
 				linSt: i,
 				linEnd: i,
+				closed: false,
 			}
 			p.BlockList = append(p.BlockList, b)
 			prevBlk = len(p.BlockList) -1
@@ -503,7 +514,7 @@ func PrintBlock(bl []Block) {
 	fmt.Println("************ Block List ***************")
 	for i:=0; i<len(bl); i++ {
 		b := bl[i]
-		fmt.Printf("  [%d]: %q<%d,%d>\n", i, b.Typ, b.linSt, b.linEnd)
+		fmt.Printf("  [%4d]: %q<%d,%d>\n", i +1, b.Typ, b.linSt + 1, b.linEnd +1)
 	}
 	fmt.Println("********** End Block List *************")
 
@@ -541,5 +552,17 @@ func PrintNode(n *MdNode, title string) {
 	}
 
 	fmt.Printf("****** End Node %s *********\n\n", title)
+
+}
+
+func (p *MdParser)PrintLines() {
+
+	lines := p.lines
+	fmt.Println("******* Lines *******")
+	for i:=0; i<len(lines); i++ {
+		l :=lines[i]
+		fmt.Printf("--[%3d]: (%4d %4d %4d %2d %2d %1d) %s\n",i+1, l.linSt, l.linEnd, l.txtSt, l.spCount, l.tbCount, l.eolChar, string(l.lintxt))
+	}
+	fmt.Println("***** End Lines *****")
 
 }
